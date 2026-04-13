@@ -1,0 +1,18 @@
+{
+  "name": "codexdepth-video-server",
+  "version": "1.0.0",
+  "description": "FFmpeg video rendering server for CodexDepth Bible YouTube channel",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "fluent-ffmpeg": "^2.1.2",
+    "axios": "^1.6.0",
+    "uuid": "^9.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
