@@ -10,11 +10,9 @@ app.use(express.json({ limit: '50mb' }));
 
 const TMP = '/tmp';
 
-// Free Minecraft parkour clips — swap these URLs anytime
-// Find free clips on archive.org, pixabay.com/videos, or mixkit.co
+// Minecraft parkour footage hosted on Google Drive
 const MINECRAFT_CLIPS = [
-  'https://cdn.pixabay.com/video/2024/02/09/199982_tiny.mp4',
-  'https://cdn.mixkit.co/videos/preview/mixkit-minecraft-parkour-loop-1234/mixkit-minecraft-parkour-loop-1234-large.mp4',
+  'https://drive.google.com/uc?export=download&id=1hG0p6GHcwuOwC_wvVc0tCAbiJqm2mZl-',
 ];
 
 // Health check
