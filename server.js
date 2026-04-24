@@ -135,71 +135,31 @@ app.post('/render', async (req, res) => {
 // Reddit Story Videos with Minecraft background
 // ─────────────────────────────────────────────────────────────
 
-// Split text into chunks under 500 chars at sentence boundaries
-function chunkText(text, maxChars = 490) {
-  const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
-  const chunks = [];
-  let current = '';
-  for (const sentence of sentences) {
-    if ((current + sentence).length > maxChars) {
-      if (current) chunks.push(current.trim());
-      current = sentence;
-    } else {
-      current += sentence;
-    }
-  }
-  if (current.trim()) chunks.push(current.trim());
-  return chunks;
-}
+// ElevenLabs TTS — uses "Rachel" voice (calm, clear, works great for narration)
+async function generateTTS(script, outputPath) {
+  const ELEVEN_API_KEY = process.env.ELEVENLABS_API_KEY;
+  const VOICE_ID = '21m00Tcm4TlvDq8ikWAM'; // Rachel — ElevenLabs default voice
 
-async function generateTTSChunk(text, outputPath) {
   const response = await axios({
     method: 'POST',
-    url: 'https://api.groq.com/openai/v1/audio/speech',
+    url: `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
     headers: {
-      'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-      'Content-Type': 'application/json'
+      'xi-api-key': ELEVEN_API_KEY,
+      'Content-Type': 'application/json',
+      'Accept': 'audio/mpeg'
     },
     data: {
-      model: 'playai-tts',
-      input: text,
-      voice: 'Aaliyah-PlayAI',
-      response_format: 'mp3'
+      text: script,
+      model_id: 'eleven_monolingual_v1',
+      voice_settings: {
+        stability: 0.5,
+        similarity_boost: 0.75
+      }
     },
     responseType: 'arraybuffer'
   });
+
   fs.writeFileSync(outputPath, Buffer.from(response.data));
-}
-
-async function generateTTS(script, outputPath, tmpDir) {
-  const chunks = chunkText(script);
-  console.log(`TTS: splitting into ${chunks.length} chunks`);
-
-  if (chunks.length === 1) {
-    await generateTTSChunk(chunks[0], outputPath);
-    return;
-  }
-
-  const chunkPaths = [];
-  for (let i = 0; i < chunks.length; i++) {
-    const chunkPath = path.join(tmpDir, `chunk_${i}.mp3`);
-    await generateTTSChunk(chunks[i], chunkPath);
-    chunkPaths.push(chunkPath);
-  }
-
-  const listPath = path.join(tmpDir, 'chunks.txt');
-  fs.writeFileSync(listPath, chunkPaths.map(p => `file '${p}'`).join('\n'));
-
-  await new Promise((resolve, reject) => {
-    ffmpeg()
-      .input(listPath)
-      .inputOptions(['-f concat', '-safe 0'])
-      .outputOptions(['-c copy'])
-      .output(outputPath)
-      .on('end', resolve)
-      .on('error', reject)
-      .run();
-  });
 }
 
 function generateSRT(script, audioDuration) {
@@ -240,8 +200,8 @@ app.post('/render-reddit-video', async (req, res) => {
 
     console.log(`[Reddit ${jobId}] Starting — "${title}"`);
 
-    console.log(`[Reddit ${jobId}] Generating TTS...`);
-    await generateTTS(script, audioPath, tmpDir);
+    console.log(`[Reddit ${jobId}] Generating TTS with ElevenLabs...`);
+    await generateTTS(script, audioPath);
 
     const audioDuration = await new Promise((resolve, reject) => {
       ffmpeg.ffprobe(audioPath, (err, meta) => {
