@@ -145,7 +145,7 @@ async function generateTTS(script, outputPath) {
     data: {
       model: 'playai-tts',
       input: script,
-      voice: 'Fritz-PlayAI',
+      voice: 'Aaliyah-PlayAI',
       response_format: 'mp3'
     },
     responseType: 'arraybuffer'
