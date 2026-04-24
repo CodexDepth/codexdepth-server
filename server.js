@@ -134,7 +134,25 @@ app.post('/render', async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 // Reddit Story Videos with Minecraft background
 // ─────────────────────────────────────────────────────────────
-async function generateTTS(script, outputPath) {
+
+// Split text into chunks under 500 chars at sentence boundaries
+function chunkText(text, maxChars = 490) {
+  const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
+  const chunks = [];
+  let current = '';
+  for (const sentence of sentences) {
+    if ((current + sentence).length > maxChars) {
+      if (current) chunks.push(current.trim());
+      current = sentence;
+    } else {
+      current += sentence;
+    }
+  }
+  if (current.trim()) chunks.push(current.trim());
+  return chunks;
+}
+
+async function generateTTSChunk(text, outputPath) {
   const response = await axios({
     method: 'POST',
     url: 'https://api.groq.com/openai/v1/audio/speech',
@@ -144,13 +162,44 @@ async function generateTTS(script, outputPath) {
     },
     data: {
       model: 'playai-tts',
-      input: script,
+      input: text,
       voice: 'Aaliyah-PlayAI',
       response_format: 'mp3'
     },
     responseType: 'arraybuffer'
   });
   fs.writeFileSync(outputPath, Buffer.from(response.data));
+}
+
+async function generateTTS(script, outputPath, tmpDir) {
+  const chunks = chunkText(script);
+  console.log(`TTS: splitting into ${chunks.length} chunks`);
+
+  if (chunks.length === 1) {
+    await generateTTSChunk(chunks[0], outputPath);
+    return;
+  }
+
+  const chunkPaths = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const chunkPath = path.join(tmpDir, `chunk_${i}.mp3`);
+    await generateTTSChunk(chunks[i], chunkPath);
+    chunkPaths.push(chunkPath);
+  }
+
+  const listPath = path.join(tmpDir, 'chunks.txt');
+  fs.writeFileSync(listPath, chunkPaths.map(p => `file '${p}'`).join('\n'));
+
+  await new Promise((resolve, reject) => {
+    ffmpeg()
+      .input(listPath)
+      .inputOptions(['-f concat', '-safe 0'])
+      .outputOptions(['-c copy'])
+      .output(outputPath)
+      .on('end', resolve)
+      .on('error', reject)
+      .run();
+  });
 }
 
 function generateSRT(script, audioDuration) {
@@ -191,11 +240,9 @@ app.post('/render-reddit-video', async (req, res) => {
 
     console.log(`[Reddit ${jobId}] Starting — "${title}"`);
 
-    // 1. Generate TTS audio
     console.log(`[Reddit ${jobId}] Generating TTS...`);
-    await generateTTS(script, audioPath);
+    await generateTTS(script, audioPath, tmpDir);
 
-    // 2. Get audio duration
     const audioDuration = await new Promise((resolve, reject) => {
       ffmpeg.ffprobe(audioPath, (err, meta) => {
         if (err) reject(err);
@@ -204,16 +251,13 @@ app.post('/render-reddit-video', async (req, res) => {
     });
     console.log(`[Reddit ${jobId}] Audio duration: ${audioDuration}s`);
 
-    // 3. Download a random Minecraft clip
     const randomUrl = MINECRAFT_CLIPS[Math.floor(Math.random() * MINECRAFT_CLIPS.length)];
-    console.log(`[Reddit ${jobId}] Downloading Minecraft clip from ${randomUrl}...`);
+    console.log(`[Reddit ${jobId}] Downloading Minecraft clip...`);
     await downloadFile(randomUrl, minecraftPath);
 
-    // 4. Generate subtitles
     const srtContent = generateSRT(script, audioDuration);
     fs.writeFileSync(srtPath, srtContent);
 
-    // 5. Render — loop Minecraft + narration + burned subtitles
     console.log(`[Reddit ${jobId}] Rendering video...`);
     await new Promise((resolve, reject) => {
       ffmpeg()
@@ -240,7 +284,6 @@ app.post('/render-reddit-video', async (req, res) => {
         .run();
     });
 
-    // 6. Return as base64
     console.log(`[Reddit ${jobId}] Render complete!`);
     const videoBuffer = fs.readFileSync(outputPath);
     const base64Video = videoBuffer.toString('base64');
