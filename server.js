@@ -200,7 +200,7 @@ app.post('/render-reddit-video', async (req, res) => {
 
     console.log(`[Reddit ${jobId}] Starting — "${title}"`);
 
-    console.log(`[Reddit ${jobId}] Generating TTS with ElevenLabs...`);
+    console.log(`[Reddit ${jobId}] API Key exists: ${!!process.env.ELEVENLABS_API_KEY}, length: ${(process.env.ELEVENLABS_API_KEY || '').length}`);
     await generateTTS(script, audioPath);
 
     const audioDuration = await new Promise((resolve, reject) => {
