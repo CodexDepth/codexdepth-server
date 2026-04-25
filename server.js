@@ -6,19 +6,16 @@ const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 
 const app = express();
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json({ limit: '100mb' }));
 
 const TMP = '/tmp';
 
-// Minecraft parkour footage hosted on Google Drive
 const MINECRAFT_CLIPS = [
   'https://drive.google.com/uc?export=download&id=1hG0p6GHcwuOwC_wvVc0tCAbiJqm2mZl-',
 ];
 
-// Health check
 app.get('/', (req, res) => res.json({ status: 'CodexDepth Video Server Running' }));
 
-// Download a file from URL to local path
 async function downloadFile(url, dest) {
   const writer = fs.createWriteStream(dest);
   const response = await axios({ url, method: 'GET', responseType: 'stream' });
@@ -29,48 +26,34 @@ async function downloadFile(url, dest) {
   });
 }
 
-// Main render endpoint (existing - Bible channel)
 app.post('/render', async (req, res) => {
   const { audio_url, video_urls, title, style } = req.body;
-
   if (!audio_url || !video_urls || !video_urls.length) {
     return res.status(400).json({ error: 'Missing audio_url or video_urls' });
   }
-
   const jobId = uuidv4();
   const audioPath = path.join(TMP, `${jobId}_audio.mp3`);
   const outputPath = path.join(TMP, `${jobId}_output.mp4`);
   const videoListPath = path.join(TMP, `${jobId}_list.txt`);
   const videoPaths = [];
-
   try {
     console.log(`[${jobId}] Starting render job: ${title}`);
-
-    console.log(`[${jobId}] Downloading audio...`);
     await downloadFile(audio_url, audioPath);
-
     const clipsToUse = video_urls.slice(0, 5);
     for (let i = 0; i < clipsToUse.length; i++) {
       const vPath = path.join(TMP, `${jobId}_clip${i}.mp4`);
-      console.log(`[${jobId}] Downloading clip ${i + 1}...`);
       await downloadFile(clipsToUse[i], vPath);
       videoPaths.push(vPath);
     }
-
     const audioDuration = await new Promise((resolve, reject) => {
       ffmpeg.ffprobe(audioPath, (err, meta) => {
         if (err) reject(err);
         else resolve(meta.format.duration);
       });
     });
-    console.log(`[${jobId}] Audio duration: ${audioDuration}s`);
-
     let listContent = '';
-    for (const vp of videoPaths) {
-      listContent += `file '${vp}'\n`;
-    }
+    for (const vp of videoPaths) { listContent += `file '${vp}'\n`; }
     fs.writeFileSync(videoListPath, listContent);
-
     const styles = {
       'dark': 'colorchannelmixer=rr=0.8:gg=0.8:bb=0.9,vignette=PI/4',
       'epic': 'eq=contrast=1.1:saturation=1.2:brightness=0.05',
@@ -78,98 +61,32 @@ app.post('/render', async (req, res) => {
       'default': 'eq=contrast=1.05:saturation=1.1'
     };
     const videoFilter = styles[style] || styles['default'];
-
-    console.log(`[${jobId}] Rendering video...`);
     await new Promise((resolve, reject) => {
       ffmpeg()
-        .input(videoListPath)
-        .inputOptions(['-f concat', '-safe 0'])
+        .input(videoListPath).inputOptions(['-f concat', '-safe 0'])
         .input(audioPath)
-        .outputOptions([
-          '-map 0:v:0',
-          '-map 1:a:0',
-          '-c:v libx264',
-          '-c:a aac',
-          '-b:a 192k',
+        .outputOptions(['-map 0:v:0', '-map 1:a:0', '-c:v libx264', '-c:a aac', '-b:a 192k',
           '-vf', `scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,${videoFilter}`,
-          `-t ${audioDuration}`,
-          '-shortest',
-          '-movflags +faststart',
-          '-preset fast',
-          '-crf 23'
-        ])
+          `-t ${audioDuration}`, '-shortest', '-movflags +faststart', '-preset fast', '-crf 23'])
         .output(outputPath)
-        .on('start', () => console.log(`[${jobId}] FFmpeg started`))
-        .on('progress', p => console.log(`[${jobId}] Progress: ${Math.round(p.percent || 0)}%`))
-        .on('end', resolve)
-        .on('error', reject)
-        .run();
+        .on('end', resolve).on('error', reject).run();
     });
-
-    console.log(`[${jobId}] Render complete!`);
     const videoBuffer = fs.readFileSync(outputPath);
     const base64Video = videoBuffer.toString('base64');
     const fileSizeMB = (videoBuffer.length / 1024 / 1024).toFixed(2);
-
-    [audioPath, outputPath, videoListPath, ...videoPaths].forEach(f => {
-      try { fs.unlinkSync(f); } catch(e) {}
-    });
-
-    res.json({
-      success: true,
-      job_id: jobId,
-      file_size_mb: fileSizeMB,
-      video_base64: base64Video
-    });
-
+    [audioPath, outputPath, videoListPath, ...videoPaths].forEach(f => { try { fs.unlinkSync(f); } catch(e) {} });
+    res.json({ success: true, job_id: jobId, file_size_mb: fileSizeMB, video_base64: base64Video });
   } catch (err) {
     console.error(`[${jobId}] Error:`, err);
-    [audioPath, outputPath, videoListPath, ...videoPaths].forEach(f => {
-      try { fs.unlinkSync(f); } catch(e) {}
-    });
+    [audioPath, outputPath, videoListPath, ...videoPaths].forEach(f => { try { fs.unlinkSync(f); } catch(e) {} });
     res.status(500).json({ error: err.message });
   }
 });
 
-// ─────────────────────────────────────────────────────────────
-// Reddit Story Videos with Minecraft background
-// ─────────────────────────────────────────────────────────────
-
-// ElevenLabs TTS — uses "Rachel" voice (calm, clear, works great for narration)
-async function generateTTS(script, outputPath) {
-  const ELEVEN_API_KEY = 'sk_da34cf607e8035546a3e19746766cc2a108ba6b6846c2464';
-  const VOICE_ID = 'wBXNqKUATyqu0RtYt25i'; // Rachel — ElevenLabs default voice
-
-  const response = await axios({
-    method: 'POST',
-    url: `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
-    headers: {
-      'xi-api-key': ELEVEN_API_KEY,
-      'Content-Type': 'application/json',
-      'Accept': 'audio/mpeg'
-    },
-    data: {
-      text: script,
-      model_id: 'eleven_monolingual_v1',
-      voice_settings: {
-        stability: 0.5,
-        similarity_boost: 0.75
-      }
-    },
-    responseType: 'arraybuffer'
-  });
-
-  fs.writeFileSync(outputPath, Buffer.from(response.data));
-}
-
-function generateSRT(script, audioDuration) {
-  const words = script.split(' ');
-  const chunkSize = 8;
-  const chunks = [];
-  for (let i = 0; i < words.length; i += chunkSize) {
-    chunks.push(words.slice(i, i + chunkSize).join(' '));
-  }
-  const timePerChunk = audioDuration / chunks.length;
+function generateSRT(audioDuration, wordCount) {
+  const wordsPerChunk = 8;
+  const chunks = Math.ceil(wordCount / wordsPerChunk);
+  const timePerChunk = audioDuration / chunks;
   const fmt = (s) => {
     const h = Math.floor(s / 3600).toString().padStart(2, '0');
     const m = Math.floor((s % 3600) / 60).toString().padStart(2, '0');
@@ -178,9 +95,9 @@ function generateSRT(script, audioDuration) {
     return `${h}:${m}:${sec},${ms}`;
   };
   let srt = '';
-  chunks.forEach((chunk, i) => {
-    srt += `${i + 1}\n${fmt(i * timePerChunk)} --> ${fmt((i + 1) * timePerChunk)}\n${chunk}\n\n`;
-  });
+  for (let i = 0; i < chunks; i++) {
+    srt += `${i + 1}\n${fmt(i * timePerChunk)} --> ${fmt((i + 1) * timePerChunk)}\n...\n\n`;
+  }
   return srt;
 }
 
@@ -195,14 +112,16 @@ app.post('/render-reddit-video', async (req, res) => {
   const outputPath    = path.join(tmpDir, 'final.mp4');
 
   try {
-    const { script, title } = req.body;
-    if (!script) return res.status(400).json({ error: 'No script provided' });
+    const { audioBase64, title } = req.body;
+    if (!audioBase64) return res.status(400).json({ error: 'No audioBase64 provided' });
 
     console.log(`[Reddit ${jobId}] Starting — "${title}"`);
 
-    console.log(`[Reddit ${jobId}] API Key exists: ${!!'sk_da34cf607e8035546a3e19746766cc2a108ba6b6846c2464'}, length: ${('sk_da34cf607e8035546a3e19746766cc2a108ba6b6846c2464' || '').length}`);
-    await generateTTS(script, audioPath);
+    // Write audio from base64
+    fs.writeFileSync(audioPath, Buffer.from(audioBase64, 'base64'));
+    console.log(`[Reddit ${jobId}] Audio written from base64`);
 
+    // Get audio duration
     const audioDuration = await new Promise((resolve, reject) => {
       ffmpeg.ffprobe(audioPath, (err, meta) => {
         if (err) reject(err);
@@ -211,37 +130,30 @@ app.post('/render-reddit-video', async (req, res) => {
     });
     console.log(`[Reddit ${jobId}] Audio duration: ${audioDuration}s`);
 
+    // Download Minecraft clip
     const randomUrl = MINECRAFT_CLIPS[Math.floor(Math.random() * MINECRAFT_CLIPS.length)];
     console.log(`[Reddit ${jobId}] Downloading Minecraft clip...`);
     await downloadFile(randomUrl, minecraftPath);
 
-    const srtContent = generateSRT(script, audioDuration);
+    // Simple SRT
+    const srtContent = generateSRT(audioDuration, 300);
     fs.writeFileSync(srtPath, srtContent);
 
+    // Render video
     console.log(`[Reddit ${jobId}] Rendering video...`);
     await new Promise((resolve, reject) => {
       ffmpeg()
-        .input(minecraftPath)
-        .inputOptions(['-stream_loop -1'])
+        .input(minecraftPath).inputOptions(['-stream_loop -1'])
         .input(audioPath)
         .outputOptions([
-          '-map 0:v:0',
-          '-map 1:a:0',
-          '-c:v libx264',
-          '-c:a aac',
-          '-b:a 192k',
-          '-vf', `scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,subtitles='${srtPath}':force_style='FontName=Arial,FontSize=20,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Alignment=2,MarginV=50'`,
-          `-t ${audioDuration}`,
-          '-movflags +faststart',
-          '-preset fast',
-          '-crf 23'
+          '-map 0:v:0', '-map 1:a:0', '-c:v libx264', '-c:a aac', '-b:a 192k',
+          '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080',
+          `-t ${audioDuration}`, '-movflags +faststart', '-preset fast', '-crf 23'
         ])
         .output(outputPath)
         .on('start', () => console.log(`[Reddit ${jobId}] FFmpeg started`))
         .on('progress', p => console.log(`[Reddit ${jobId}] Progress: ${Math.round(p.percent || 0)}%`))
-        .on('end', resolve)
-        .on('error', reject)
-        .run();
+        .on('end', resolve).on('error', reject).run();
     });
 
     console.log(`[Reddit ${jobId}] Render complete!`);
@@ -251,12 +163,7 @@ app.post('/render-reddit-video', async (req, res) => {
 
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {}
 
-    res.json({
-      success: true,
-      job_id: jobId,
-      file_size_mb: fileSizeMB,
-      video_base64: base64Video
-    });
+    res.json({ success: true, job_id: jobId, file_size_mb: fileSizeMB, video_base64: base64Video });
 
   } catch (err) {
     console.error(`[Reddit ${jobId}] Error:`, err.message);
