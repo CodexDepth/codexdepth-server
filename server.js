@@ -137,7 +137,7 @@ app.post('/render', async (req, res) => {
 
 // ElevenLabs TTS — uses "Rachel" voice (calm, clear, works great for narration)
 async function generateTTS(script, outputPath) {
-  const ELEVEN_API_KEY = 'sk_3e3cd3e8461401ce438b66642f398e9b2e9990b5ef4d28cb';
+  const ELEVEN_API_KEY = 'sk_da34cf607e8035546a3e19746766cc2a108ba6b6846c2464';
   const VOICE_ID = 'wBXNqKUATyqu0RtYt25i'; // Rachel — ElevenLabs default voice
 
   const response = await axios({
@@ -200,7 +200,7 @@ app.post('/render-reddit-video', async (req, res) => {
 
     console.log(`[Reddit ${jobId}] Starting — "${title}"`);
 
-    console.log(`[Reddit ${jobId}] API Key exists: ${!!'sk_3e3cd3e8461401ce438b66642f398e9b2e9990b5ef4d28cb'}, length: ${('sk_3e3cd3e8461401ce438b66642f398e9b2e9990b5ef4d28cb' || '').length}`);
+    console.log(`[Reddit ${jobId}] API Key exists: ${!!'sk_da34cf607e8035546a3e19746766cc2a108ba6b6846c2464'}, length: ${('sk_da34cf607e8035546a3e19746766cc2a108ba6b6846c2464' || '').length}`);
     await generateTTS(script, audioPath);
 
     const audioDuration = await new Promise((resolve, reject) => {
