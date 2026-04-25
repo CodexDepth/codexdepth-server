@@ -1,4 +1,4 @@
-const express = require('express');
+hconst express = require('express');
 const ffmpeg = require('fluent-ffmpeg');
 const axios = require('axios');
 const fs = require('fs');
@@ -138,7 +138,7 @@ app.post('/render', async (req, res) => {
 // ElevenLabs TTS — uses "Rachel" voice (calm, clear, works great for narration)
 async function generateTTS(script, outputPath) {
   const ELEVEN_API_KEY = process.env.ELEVENLABS_API_KEY;
-  const VOICE_ID = '21m00Tcm4TlvDq8ikWAM'; // Rachel — ElevenLabs default voice
+  const VOICE_ID = 'wBXNqKUATyqu0RtYt25i'; // Rachel — ElevenLabs default voice
 
   const response = await axios({
     method: 'POST',
