@@ -3,174 +3,95 @@ const ffmpeg = require('fluent-ffmpeg');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 app.use(express.json({ limit: '100mb' }));
 
 const TMP = '/tmp';
-
-const MINECRAFT_CLIPS = [
-  'https://drive.google.com/uc?export=download&id=1hG0p6GHcwuOwC_wvVc0tCAbiJqm2mZl-',
-];
+const MINECRAFT_CLIPS = ['https://drive.google.com/uc?export=download&id=1hG0p6GHcwuOwC_wvVc0tCAbiJqm2mZl-'];
 
 app.get('/', (req, res) => res.json({ status: 'CodexDepth Video Server Running' }));
 
 async function downloadFile(url, dest) {
-  const writer = fs.createWriteStream(dest);
-  const response = await axios({ url, method: 'GET', responseType: 'stream' });
-  response.data.pipe(writer);
-  return new Promise((resolve, reject) => {
-    writer.on('finish', resolve);
-    writer.on('error', reject);
-  });
+    const writer = fs.createWriteStream(dest);
+    const response = await axios({ url, method: 'GET', responseType: 'stream' });
+    response.data.pipe(writer);
+    return new Promise((resolve, reject) => {
+          writer.on('finish', resolve);
+          writer.on('error', reject);
+    });
 }
 
 app.post('/render', async (req, res) => {
-  const { audio_url, video_urls, title, style } = req.body;
-  if (!audio_url || !video_urls || !video_urls.length) {
-    return res.status(400).json({ error: 'Missing audio_url or video_urls' });
-  }
-  const jobId = uuidv4();
-  const audioPath = path.join(TMP, `${jobId}_audio.mp3`);
-  const outputPath = path.join(TMP, `${jobId}_output.mp4`);
-  const videoListPath = path.join(TMP, `${jobId}_list.txt`);
-  const videoPaths = [];
-  try {
-    console.log(`[${jobId}] Starting render job: ${title}`);
-    await downloadFile(audio_url, audioPath);
-    const clipsToUse = video_urls.slice(0, 5);
-    for (let i = 0; i < clipsToUse.length; i++) {
-      const vPath = path.join(TMP, `${jobId}_clip${i}.mp4`);
-      await downloadFile(clipsToUse[i], vPath);
-      videoPaths.push(vPath);
+    const { audio_url, video_urls, title, style } = req.body;
+    if (!audio_url || !video_urls || !video_urls.length) return res.status(400).json({ error: 'Missing params' });
+    const jobId = uuidv4();
+    const audioPath = path.join(TMP, jobId+'_audio.mp3');
+    const outputPath = path.join(TMP, jobId+'_output.mp4');
+    const videoListPath = path.join(TMP, jobId+'_list.txt');
+    const videoPaths = [];
+    try {
+          await downloadFile(audio_url, audioPath);
+          for (let i = 0; i < video_urls.slice(0,5).length; i++) {
+                  const vPath = path.join(TMP, jobId+'_clip'+i+'.mp4');
+                  await downloadFile(video_urls[i], vPath);
+                  videoPaths.push(vPath);
+          }
+          const audioDuration = await new Promise((resolve, reject) => {
+                  ffmpeg.ffprobe(audioPath, (err, meta) => { if (err) reject(err); else resolve(meta.format.duration); });
+          });
+          let listContent = '';
+          for (const vp of videoPaths) listContent += "file '"+vp+"'\n";
+          fs.writeFileSync(videoListPath, listContent);
+          const styles = { dark: 'colorchannelmixer=rr=0.8:gg=0.8:bb=0.9', default: 'eq=contrast=1.05:saturation=1.1' };
+          const vf = styles[style] || styles.default;
+          await new Promise((resolve, reject) => {
+                  ffmpeg().input(videoListPath).inputOptions(['-f concat','-safe 0']).input(audioPath)
+                    .outputOptions(['-map 0:v:0','-map 1:a:0','-c:v libx264','-c:a aac','-b:a 192k',
+                                              '-vf','scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,'+vf,
+                                              '-t '+audioDuration,'-shortest','-movflags +faststart','-preset fast','-crf 23'])
+                    .output(outputPath).on('end',resolve).on('error',reject).run();
+          });
+          const buf = fs.readFileSync(outputPath);
+          [audioPath,outputPath,videoListPath,...videoPaths].forEach(f=>{try{fs.unlinkSync(f);}catch(e){}});
+          res.json({ success:true, job_id:jobId, file_size_mb:(buf.length/1024/1024).toFixed(2), video_base64:buf.toString('base64') });
+    } catch(err) {
+          [audioPath,outputPath,videoListPath,...videoPaths].forEach(f=>{try{fs.unlinkSync(f);}catch(e){}});
+          res.status(500).json({ error: err.message });
     }
-    const audioDuration = await new Promise((resolve, reject) => {
-      ffmpeg.ffprobe(audioPath, (err, meta) => {
-        if (err) reject(err);
-        else resolve(meta.format.duration);
-      });
-    });
-    let listContent = '';
-    for (const vp of videoPaths) { listContent += `file '${vp}'\n`; }
-    fs.writeFileSync(videoListPath, listContent);
-    const styles = {
-      'dark': 'colorchannelmixer=rr=0.8:gg=0.8:bb=0.9,vignette=PI/4',
-      'epic': 'eq=contrast=1.1:saturation=1.2:brightness=0.05',
-      'peaceful': 'eq=saturation=0.9:brightness=0.02,gblur=sigma=0.5',
-      'default': 'eq=contrast=1.05:saturation=1.1'
-    };
-    const videoFilter = styles[style] || styles['default'];
-    await new Promise((resolve, reject) => {
-      ffmpeg()
-        .input(videoListPath).inputOptions(['-f concat', '-safe 0'])
-        .input(audioPath)
-        .outputOptions(['-map 0:v:0', '-map 1:a:0', '-c:v libx264', '-c:a aac', '-b:a 192k',
-          '-vf', `scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,${videoFilter}`,
-          `-t ${audioDuration}`, '-shortest', '-movflags +faststart', '-preset fast', '-crf 23'])
-        .output(outputPath)
-        .on('end', resolve).on('error', reject).run();
-    });
-    const videoBuffer = fs.readFileSync(outputPath);
-    const base64Video = videoBuffer.toString('base64');
-    const fileSizeMB = (videoBuffer.length / 1024 / 1024).toFixed(2);
-    [audioPath, outputPath, videoListPath, ...videoPaths].forEach(f => { try { fs.unlinkSync(f); } catch(e) {} });
-    res.json({ success: true, job_id: jobId, file_size_mb: fileSizeMB, video_base64: base64Video });
-  } catch (err) {
-    console.error(`[${jobId}] Error:`, err);
-    [audioPath, outputPath, videoListPath, ...videoPaths].forEach(f => { try { fs.unlinkSync(f); } catch(e) {} });
-    res.status(500).json({ error: err.message });
-  }
 });
-
-function generateSRT(audioDuration, wordCount) {
-  const wordsPerChunk = 8;
-  const chunks = Math.ceil(wordCount / wordsPerChunk);
-  const timePerChunk = audioDuration / chunks;
-  const fmt = (s) => {
-    const h = Math.floor(s / 3600).toString().padStart(2, '0');
-    const m = Math.floor((s % 3600) / 60).toString().padStart(2, '0');
-    const sec = Math.floor(s % 60).toString().padStart(2, '0');
-    const ms = Math.floor((s % 1) * 1000).toString().padStart(3, '0');
-    return `${h}:${m}:${sec},${ms}`;
-  };
-  let srt = '';
-  for (let i = 0; i < chunks; i++) {
-    srt += `${i + 1}\n${fmt(i * timePerChunk)} --> ${fmt((i + 1) * timePerChunk)}\n...\n\n`;
-  }
-  return srt;
-}
 
 app.post('/render-reddit-video', async (req, res) => {
-  const jobId = uuidv4();
-  const tmpDir = path.join(TMP, `reddit_${jobId}`);
-  fs.mkdirSync(tmpDir, { recursive: true });
-
-  const audioPath     = path.join(tmpDir, 'narration.mp3');
-  const minecraftPath = path.join(tmpDir, 'minecraft.mp4');
-  const srtPath       = path.join(tmpDir, 'subtitles.srt');
-  const outputPath    = path.join(tmpDir, 'final.mp4');
-
-  try {
-    const { audioBase64, title } = req.body;
-    if (!audioBase64) return res.status(400).json({ error: 'No audioBase64 provided' });
-
-    console.log(`[Reddit ${jobId}] Starting — "${title}"`);
-
-    // Write audio from base64
-    fs.writeFileSync(audioPath, Buffer.from(audioBase64, 'base64'));
-    console.log(`[Reddit ${jobId}] Audio written from base64`);
-
-    // Get audio duration
-    const audioDuration = await new Promise((resolve, reject) => {
-      ffmpeg.ffprobe(audioPath, (err, meta) => {
-        if (err) reject(err);
-        else resolve(meta.format.duration);
-      });
-    });
-    console.log(`[Reddit ${jobId}] Audio duration: ${audioDuration}s`);
-
-    // Download Minecraft clip
-    const randomUrl = MINECRAFT_CLIPS[Math.floor(Math.random() * MINECRAFT_CLIPS.length)];
-    console.log(`[Reddit ${jobId}] Downloading Minecraft clip...`);
-    await downloadFile(randomUrl, minecraftPath);
-
-    // Simple SRT
-    const srtContent = generateSRT(audioDuration, 300);
-    fs.writeFileSync(srtPath, srtContent);
-
-    // Render video
-    console.log(`[Reddit ${jobId}] Rendering video...`);
-    await new Promise((resolve, reject) => {
-      ffmpeg()
-        .input(minecraftPath).inputOptions(['-stream_loop -1'])
-        .input(audioPath)
-        .outputOptions([
-          '-map 0:v:0', '-map 1:a:0', '-c:v libx264', '-c:a aac', '-b:a 192k',
-          '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080',
-          `-t ${audioDuration}`, '-movflags +faststart', '-preset fast', '-crf 23'
-        ])
-        .output(outputPath)
-        .on('start', () => console.log(`[Reddit ${jobId}] FFmpeg started`))
-        .on('progress', p => console.log(`[Reddit ${jobId}] Progress: ${Math.round(p.percent || 0)}%`))
-        .on('end', resolve).on('error', reject).run();
-    });
-
-    console.log(`[Reddit ${jobId}] Render complete!`);
-    const videoBuffer = fs.readFileSync(outputPath);
-    const base64Video = videoBuffer.toString('base64');
-    const fileSizeMB = (videoBuffer.length / 1024 / 1024).toFixed(2);
-
-    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {}
-
-    res.json({ success: true, job_id: jobId, file_size_mb: fileSizeMB, video_base64: base64Video });
-
-  } catch (err) {
-    console.error(`[Reddit ${jobId}] Error:`, err.message);
-    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {}
-    res.status(500).json({ error: err.message });
-  }
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`CodexDepth Video Server running on port ${PORT}`));
+    const jobId = uuidv4();
+    const tmpDir = path.join(TMP, 'reddit_'+jobId);
+    fs.mkdirSync(tmpDir, { recursive: true });
+    const audioPath = path.join(tmpDir, 'narration.mp3');
+    const minecraftPath = path.join(tmpDir, 'minecraft.mp4');
+    const outputPath = path.join(tmpDir, 'final.mp4');
+    try {
+          const { script, audioBase64, title } = req.body;
+          console.log('[Reddit '+jobId+'] Starting - '+title);
+          if (audioBase64) {
+                  fs.writeFileSync(audioPath, Buffer.from(audioBase64, 'base64'));
+                  console.log('[Reddit '+jobId+'] Audio from base64');
+          } else if (script) {
+                  const clean = script.replace(/"/g,"'").replace(/\n/g,' ').substring(0,500);
+                  const wavPath = audioPath.replace('.mp3','.wav');
+                  execSync('espeak -v en+m3 -s 145 "'+clean+'" -w "'+wavPath+'"', { timeout: 60000 });
+                  execSync('ffmpeg -y -i "'+wavPath+'" -codec:a libmp3lame -qscale:a 2 "'+audioPath+'"', { timeout: 30000 });
+                  try { fs.unlinkSync(wavPath); } catch(e) {}
+                  console.log('[Reddit '+jobId+'] TTS done');
+          } else {
+                  return res.status(400).json({ error: 'No script or audioBase64' });
+          }
+          const audioDuration = await new Promise((resolve, reject) => {
+                  ffmpeg.ffprobe(audioPath, (err, meta) => { if (err) reject(err); else resolve(meta.format.duration); });
+          });
+          console.log('[Reddit '+jobId+'] Duration: '+audioDuration+'s');
+          await downloadFile(MINECRAFT_CLIPS[0], minecraftPath);
+          console.log('[Reddit '+jobId+'] Minecraft downloaded, rendering...');
+          await new Promise((resolve, reject) => {
+                  ffmpeg().input(minecraftPath).inputOptions(['-stream_loop -1']).input(audioPath)
+                    .outputOpti
