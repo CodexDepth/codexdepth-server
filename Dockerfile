@@ -1,7 +1,7 @@
 FROM node:18-slim
 
-# Install FFmpeg
-RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+# Install FFmpeg and espeak for TTS
+RUN apt-get update && apt-get install -y ffmpeg espeak && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
