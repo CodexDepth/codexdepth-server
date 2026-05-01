@@ -45,12 +45,11 @@ app.post('/render', async (req, res) => {
     let listContent = '';
     for (const vp of videoPaths) listContent += "file '"+vp+"'\n";
     fs.writeFileSync(videoListPath, listContent);
-    const vf = style === 'dark' ? 'colorchannelmixer=rr=0.8:gg=0.8:bb=0.9' : 'eq=contrast=1.05:saturation=1.1';
     await new Promise((resolve, reject) => {
       ffmpeg().input(videoListPath).inputOptions(['-f concat','-safe 0']).input(audioPath)
-        .outputOptions(['-map 0:v:0','-map 1:a:0','-c:v libx264','-c:a aac','-b:a 192k',
-          '-vf','scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,'+vf,
-          '-t '+audioDuration,'-shortest','-movflags +faststart','-preset fast','-crf 23'])
+        .outputOptions(['-map 0:v:0','-map 1:a:0','-c:v libx264','-c:a aac','-b:a 128k',
+          '-vf','scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720',
+          '-t '+audioDuration,'-shortest','-movflags +faststart','-preset ultrafast','-crf 28'])
         .output(outputPath).on('end',resolve).on('error',reject).run();
     });
     const buf = fs.readFileSync(outputPath);
@@ -94,9 +93,9 @@ app.post('/render-reddit-video', async (req, res) => {
     if (minecraftSize < 100000) throw new Error('Minecraft download failed: '+minecraftSize+' bytes');
     await new Promise((resolve, reject) => {
       ffmpeg().input(minecraftPath).inputOptions(['-stream_loop -1']).input(audioPath)
-        .outputOptions(['-map 0:v:0','-map 1:a:0','-c:v libx264','-c:a aac','-b:a 192k',
-          '-vf','scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080',
-          '-t '+audioDuration,'-movflags +faststart','-preset fast','-crf 23'])
+        .outputOptions(['-map 0:v:0','-map 1:a:0','-c:v libx264','-c:a aac','-b:a 128k',
+          '-vf','scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720',
+          '-t '+audioDuration,'-movflags +faststart','-preset ultrafast','-crf 28'])
         .output(outputPath)
         .on('progress', p => console.log('[Reddit '+jobId+'] '+Math.round(p.percent||0)+'%'))
         .on('end',resolve).on('error',reject).run();
