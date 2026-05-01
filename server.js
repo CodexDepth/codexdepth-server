@@ -10,30 +10,13 @@ const app = express();
 app.use(express.json({ limit: '100mb' }));
 
 const TMP = '/tmp';
-const GDRIVE_FILE_ID = '1hG0p6GHcwuOwC_wvVc0tCAbiJqm2mZl-';
+const MINECRAFT_URL = 'https://archive.org/download/minecraft-parkour-gameplay-no-copyright-480p/minecraft-parkour-gameplay-no-copyright-480p.mp4';
 
 app.get('/', (req, res) => res.json({ status: 'CodexDepth Video Server Running' }));
 
-async function downloadGDrive(fileId, dest) {
-  const url = 'https://drive.google.com/uc?export=download&id=' + fileId + '&confirm=t';
-  const response = await axios({
-    url,
-    method: 'GET',
-    responseType: 'stream',
-    maxRedirects: 10,
-    headers: { 'User-Agent': 'Mozilla/5.0' }
-  });
-  const writer = fs.createWriteStream(dest);
-  response.data.pipe(writer);
-  return new Promise((resolve, reject) => {
-    writer.on('finish', resolve);
-    writer.on('error', reject);
-  });
-}
-
 async function downloadFile(url, dest) {
   const writer = fs.createWriteStream(dest);
-  const response = await axios({ url, method: 'GET', responseType: 'stream' });
+  const response = await axios({ url, method: 'GET', responseType: 'stream', maxRedirects: 10, headers: { 'User-Agent': 'Mozilla/5.0' } });
   response.data.pipe(writer);
   return new Promise((resolve, reject) => {
     writer.on('finish', resolve);
@@ -104,12 +87,11 @@ app.post('/render-reddit-video', async (req, res) => {
     const audioDuration = await new Promise((resolve, reject) => {
       ffmpeg.ffprobe(audioPath, (err, meta) => { if (err) reject(err); else resolve(meta.format.duration); });
     });
-    console.log('[Reddit '+jobId+'] Duration: '+audioDuration+'s');
-    console.log('[Reddit '+jobId+'] Downloading Minecraft from GDrive...');
-    await downloadGDrive(GDRIVE_FILE_ID, minecraftPath);
+    console.log('[Reddit '+jobId+'] Duration: '+audioDuration+'s, downloading Minecraft...');
+    await downloadFile(MINECRAFT_URL, minecraftPath);
     const minecraftSize = fs.statSync(minecraftPath).size;
-    console.log('[Reddit '+jobId+'] Minecraft downloaded: '+(minecraftSize/1024/1024).toFixed(1)+'MB');
-    if (minecraftSize < 100000) throw new Error('Minecraft file too small - download failed');
+    console.log('[Reddit '+jobId+'] Minecraft: '+(minecraftSize/1024/1024).toFixed(1)+'MB');
+    if (minecraftSize < 100000) throw new Error('Minecraft download failed: '+minecraftSize+' bytes');
     await new Promise((resolve, reject) => {
       ffmpeg().input(minecraftPath).inputOptions(['-stream_loop -1']).input(audioPath)
         .outputOptions(['-map 0:v:0','-map 1:a:0','-c:v libx264','-c:a aac','-b:a 192k',
