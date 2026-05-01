@@ -25,40 +25,7 @@ async function downloadFile(url, dest) {
 }
 
 app.post('/render', async (req, res) => {
-  const { audio_url, video_urls, title, style } = req.body;
-  if (!audio_url || !video_urls || !video_urls.length) return res.status(400).json({ error: 'Missing params' });
-  const jobId = uuidv4();
-  const audioPath = path.join(TMP, jobId+'_audio.mp3');
-  const outputPath = path.join(TMP, jobId+'_output.mp4');
-  const videoListPath = path.join(TMP, jobId+'_list.txt');
-  const videoPaths = [];
-  try {
-    await downloadFile(audio_url, audioPath);
-    for (let i = 0; i < video_urls.slice(0,5).length; i++) {
-      const vPath = path.join(TMP, jobId+'_clip'+i+'.mp4');
-      await downloadFile(video_urls[i], vPath);
-      videoPaths.push(vPath);
-    }
-    const audioDuration = await new Promise((resolve, reject) => {
-      ffmpeg.ffprobe(audioPath, (err, meta) => { if (err) reject(err); else resolve(meta.format.duration); });
-    });
-    let listContent = '';
-    for (const vp of videoPaths) listContent += "file '"+vp+"'\n";
-    fs.writeFileSync(videoListPath, listContent);
-    await new Promise((resolve, reject) => {
-      ffmpeg().input(videoListPath).inputOptions(['-f concat','-safe 0']).input(audioPath)
-        .outputOptions(['-map 0:v:0','-map 1:a:0','-c:v libx264','-c:a aac','-b:a 128k',
-          '-vf','scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720',
-          '-t '+audioDuration,'-shortest','-movflags +faststart','-preset ultrafast','-crf 28'])
-        .output(outputPath).on('end',resolve).on('error',reject).run();
-    });
-    const buf = fs.readFileSync(outputPath);
-    [audioPath,outputPath,videoListPath,...videoPaths].forEach(f=>{try{fs.unlinkSync(f);}catch(e){}});
-    res.json({ success:true, job_id:jobId, file_size_mb:(buf.length/1024/1024).toFixed(2), video_base64:buf.toString('base64') });
-  } catch(err) {
-    [audioPath,outputPath,videoListPath,...videoPaths].forEach(f=>{try{fs.unlinkSync(f);}catch(e){}});
-    res.status(500).json({ error: err.message });
-  }
+  res.status(501).json({ error: 'Use /render-reddit-video' });
 });
 
 app.post('/render-reddit-video', async (req, res) => {
@@ -67,10 +34,12 @@ app.post('/render-reddit-video', async (req, res) => {
   fs.mkdirSync(tmpDir, { recursive: true });
   const audioPath = path.join(tmpDir, 'narration.mp3');
   const minecraftPath = path.join(tmpDir, 'minecraft.mp4');
+  const loopedPath = path.join(tmpDir, 'looped.mp4');
   const outputPath = path.join(tmpDir, 'final.mp4');
   try {
     const { script, audioBase64, title } = req.body;
     console.log('[Reddit '+jobId+'] Starting - '+title);
+
     if (audioBase64) {
       fs.writeFileSync(audioPath, Buffer.from(audioBase64, 'base64'));
     } else if (script) {
@@ -83,27 +52,42 @@ app.post('/render-reddit-video', async (req, res) => {
     } else {
       return res.status(400).json({ error: 'No script or audioBase64' });
     }
+
     const audioDuration = await new Promise((resolve, reject) => {
       ffmpeg.ffprobe(audioPath, (err, meta) => { if (err) reject(err); else resolve(meta.format.duration); });
     });
-    console.log('[Reddit '+jobId+'] Duration: '+audioDuration+'s, downloading Minecraft...');
+    console.log('[Reddit '+jobId+'] Audio: '+audioDuration+'s');
+
     await downloadFile(MINECRAFT_URL, minecraftPath);
     const minecraftSize = fs.statSync(minecraftPath).size;
     console.log('[Reddit '+jobId+'] Minecraft: '+(minecraftSize/1024/1024).toFixed(1)+'MB');
-    if (minecraftSize < 100000) throw new Error('Minecraft download failed: '+minecraftSize+' bytes');
-    await new Promise((resolve, reject) => {
-      ffmpeg().input(minecraftPath).inputOptions(['-stream_loop -1']).input(audioPath)
-        .outputOptions(['-map 0:v:0','-map 1:a:0','-c:v libx264','-c:a aac','-b:a 128k',
-          '-vf','scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720',
-          '-t '+audioDuration,'-movflags +faststart','-preset ultrafast','-crf 28'])
-        .output(outputPath)
-        .on('progress', p => console.log('[Reddit '+jobId+'] '+Math.round(p.percent||0)+'%'))
-        .on('end',resolve).on('error',reject).run();
+    if (minecraftSize < 100000) throw new Error('Minecraft download failed');
+
+    // Step 1: Loop the video to match audio duration using concat demuxer (no re-encode)
+    const clipDuration = await new Promise((resolve, reject) => {
+      ffmpeg.ffprobe(minecraftPath, (err, meta) => { if (err) reject(err); else resolve(meta.format.duration); });
     });
+    const loops = Math.ceil(audioDuration / clipDuration) + 1;
+    const concatList = path.join(tmpDir, 'concat.txt');
+    let concatContent = '';
+    for (let i = 0; i < loops; i++) concatContent += "file '"+minecraftPath+"'\n";
+    fs.writeFileSync(concatList, concatContent);
+
+    console.log('[Reddit '+jobId+'] Creating looped video ('+loops+' loops)...');
+    await new Promise((resolve, reject) => {
+      execSync('ffmpeg -y -f concat -safe 0 -i "'+concatList+'" -c copy -t '+audioDuration+' "'+loopedPath+'"', { timeout: 120000 });
+      resolve();
+    });
+
+    // Step 2: Mux looped video with audio (re-encode audio only, copy video)
+    console.log('[Reddit '+jobId+'] Muxing...');
+    execSync('ffmpeg -y -i "'+loopedPath+'" -i "'+audioPath+'" -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 128k -t '+audioDuration+' "'+outputPath+'"', { timeout: 120000 });
+
     const buf = fs.readFileSync(outputPath);
     try { fs.rmSync(tmpDir,{recursive:true,force:true}); } catch(e) {}
     console.log('[Reddit '+jobId+'] Done! '+(buf.length/1024/1024).toFixed(2)+'MB');
     res.json({ success:true, job_id:jobId, file_size_mb:(buf.length/1024/1024).toFixed(2), video_base64:buf.toString('base64') });
+
   } catch(err) {
     console.error('[Reddit '+jobId+'] Error:', err.message);
     try { fs.rmSync(tmpDir,{recursive:true,force:true}); } catch(e) {}
