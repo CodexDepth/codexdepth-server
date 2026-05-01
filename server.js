@@ -10,7 +10,7 @@ const app = express();
 app.use(express.json({ limit: '100mb' }));
 
 const TMP = '/tmp';
-const MINECRAFT_URL = 'https://archive.org/download/minecraft-parkour-gameplay-no-copyright-480p/minecraft-parkour-gameplay-no-copyright-480p.mp4';
+const MINECRAFT_URL = 'https://archive.org/download/minecraft-parkour-gameplay-no-copyright-480p/Minecraft_Parkour_Gameplay_No_Copyright_480p.mp4';
 
 app.get('/', (req, res) => res.json({ status: 'CodexDepth Video Server Running' }));
 
