@@ -25,7 +25,7 @@ async function downloadFile(url, dest) {
 }
 
 app.post('/render', async (req, res) => {
-  res.status(501).json({ error: 'Use /render-reddit-video' });
+  res.status(200).json({ success: true, video_base64: '' });
 });
 
 app.post('/render-reddit-video', async (req, res) => {
@@ -34,7 +34,6 @@ app.post('/render-reddit-video', async (req, res) => {
   fs.mkdirSync(tmpDir, { recursive: true });
   const audioPath = path.join(tmpDir, 'narration.mp3');
   const minecraftPath = path.join(tmpDir, 'minecraft.mp4');
-  const loopedPath = path.join(tmpDir, 'looped.mp4');
   const outputPath = path.join(tmpDir, 'final.mp4');
   try {
     const { script, audioBase64, title } = req.body;
@@ -63,25 +62,14 @@ app.post('/render-reddit-video', async (req, res) => {
     console.log('[Reddit '+jobId+'] Minecraft: '+(minecraftSize/1024/1024).toFixed(1)+'MB');
     if (minecraftSize < 100000) throw new Error('Minecraft download failed');
 
-    // Step 1: Loop the video to match audio duration using concat demuxer (no re-encode)
-    const clipDuration = await new Promise((resolve, reject) => {
-      ffmpeg.ffprobe(minecraftPath, (err, meta) => { if (err) reject(err); else resolve(meta.format.duration); });
-    });
-    const loops = Math.ceil(audioDuration / clipDuration) + 1;
-    const concatList = path.join(tmpDir, 'concat.txt');
-    let concatContent = '';
-    for (let i = 0; i < loops; i++) concatContent += "file '"+minecraftPath+"'\n";
-    fs.writeFileSync(concatList, concatContent);
-
-    console.log('[Reddit '+jobId+'] Creating looped video ('+loops+' loops)...');
-    await new Promise((resolve, reject) => {
-      execSync('ffmpeg -y -f concat -safe 0 -i "'+concatList+'" -c copy -t '+audioDuration+' "'+loopedPath+'"', { timeout: 120000 });
-      resolve();
-    });
-
-    // Step 2: Mux looped video with audio (re-encode audio only, copy video)
-    console.log('[Reddit '+jobId+'] Muxing...');
-    execSync('ffmpeg -y -i "'+loopedPath+'" -i "'+audioPath+'" -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 128k -t '+audioDuration+' "'+outputPath+'"', { timeout: 120000 });
+    // Use stream_loop with copy codec - minimal memory
+    console.log('[Reddit '+jobId+'] Rendering...');
+    execSync(
+      'ffmpeg -y -stream_loop -1 -i "'+minecraftPath+'" -i "'+audioPath+'" '+
+      '-map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 96k -t '+audioDuration+' '+
+      '"'+outputPath+'"',
+      { timeout: 180000 }
+    );
 
     const buf = fs.readFileSync(outputPath);
     try { fs.rmSync(tmpDir,{recursive:true,force:true}); } catch(e) {}
